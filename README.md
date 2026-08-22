@@ -20,7 +20,7 @@ sessions — then press the left button (**Check**, **Preview** or **Extract**) 
 |---|---|
 | **Scripts (.scx + text)** | SC3 games: CHAOS;CHILD and friends, text injected with sc3tools |
 | **Files (CG, textures…)** | rebuilding an asset archive from a folder |
-| **Scenario (PSB archive)** | M2 engine games: STEINS;GATE RE:BOOT and friends |
+| **Scenario (PSB archive)** | M2 engine games: STEINS;GATE RE:BOOT |
 
 ### Scripts mode
 
