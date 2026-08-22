@@ -5,14 +5,14 @@ using System.Text.RegularExpressions;
 
 namespace Magecraft
 {
-    /// <summary>Resultat brut d'un appel a sc3tools.exe.</summary>
+    /// <summary>Raw outcome of one sc3tools.exe invocation.</summary>
     public sealed class Sc3Result
     {
         public int ExitCode;
         public string Output = "";
         public bool Ok { get { return ExitCode == 0 && !Output.Contains("Error:"); } }
 
-        /// <summary>Caractere refuse par le charset, ou '\0' si l'erreur est d'une autre nature.</summary>
+        /// <summary>The character the charset rejected, or '\0' when the error is something else.</summary>
         public char RejectedChar
         {
             get
@@ -32,25 +32,30 @@ namespace Magecraft
         }
     }
 
-    /// <summary>Enveloppe autour de sc3tools.exe (Committee of Zero).</summary>
+    /// <summary>Wrapper around sc3tools.exe (Committee of Zero).</summary>
     public sealed class Sc3Tools
     {
         private static readonly Regex Ansi = new Regex(@"\x1B\[[0-9;]*[A-Za-z]", RegexOptions.Compiled);
-        public const string Game = "cc";
 
         private readonly string _exe;
-        public Sc3Tools(string exePath) { _exe = exePath; }
+        private readonly string _game;
 
-        /// <summary>Reecrit le texte de <paramref name="scx"/> (modifie sur place) a partir de <paramref name="txt"/>.</summary>
-        public Sc3Result ReplaceText(string scx, string txt, string workingDir)
+        public Sc3Tools(string exePath, string game = "cc")
         {
-            return Run(workingDir, "replace-text", scx, txt, Game);
+            _exe = exePath;
+            _game = game;
         }
 
-        /// <summary>Extrait le texte de <paramref name="scx"/> vers &lt;workingDir&gt;\txt\&lt;nom&gt;.txt.</summary>
+        /// <summary>Rewrites the text of <paramref name="scx"/> in place from <paramref name="txt"/>.</summary>
+        public Sc3Result ReplaceText(string scx, string txt, string workingDir)
+        {
+            return Run(workingDir, "replace-text", scx, txt, _game);
+        }
+
+        /// <summary>Extracts the text of <paramref name="scx"/> into &lt;workingDir&gt;\txt\&lt;name&gt;.txt.</summary>
         public Sc3Result ExtractText(string scx, string workingDir)
         {
-            return Run(workingDir, "extract-text", scx, Game);
+            return Run(workingDir, "extract-text", scx, _game);
         }
 
         private Sc3Result Run(string workingDir, params string[] args)

@@ -7,12 +7,11 @@ using System.Text;
 namespace Magecraft
 {
     /// <summary>
-    /// Reference de controle : le texte reellement contenu dans les .scx de script-compile,
-    /// reextrait par sc3tools.
+    /// The text actually stored inside the compiled scripts, read back with sc3tools.
     ///
-    /// C'est la structure des scripts du jeu -- nombre de lignes et balises -- et non un
-    /// export anglais qui peut avoir vieilli. Comparer script-decompile a cette reference
-    /// dit donc a la fois si le texte est valide et ce que la prochaine compilation changera.
+    /// This is the structure the game really uses -- line count and tags -- rather than a
+    /// separate export that may have drifted. Comparing the translation against it tells
+    /// you both whether the text is valid and what the next build will change.
     /// </summary>
     public sealed class Reference : IDisposable
     {
@@ -24,48 +23,56 @@ namespace Magecraft
 
         private Reference(string work) { _work = work; }
 
-        /// <summary>Copie les scripts compiles puis en extrait le texte en une seule passe.</summary>
-        public static Reference Extract(ProjectPaths paths, Sc3Tools sc3, Action<string> log)
+        /// <summary>Copies the scripts to a scratch folder and extracts all their text in one pass.</summary>
+        public static Reference Extract(Workspace workspace, Sc3Tools sc3, Action<string> log)
         {
-            string work = Path.Combine(Path.GetTempPath(), "ccfr-ref-" + Guid.NewGuid().ToString("N"));
+            string work = Path.Combine(Path.GetTempPath(), "magecraft-ref-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(work);
             var reference = new Reference(work);
 
-            var scx = Directory.GetFiles(paths.ScriptOut, "*.scx");
-            if (scx.Length == 0)
+            var scripts = workspace.Scripts();
+            if (scripts.Count == 0)
             {
-                if (log != null) log("Aucun script .scx dans script-compile : controles de structure impossibles.");
+                if (log != null) log("No .scx files found: structural checks are unavailable.");
                 return reference;
             }
 
-            foreach (var f in scx) File.Copy(f, Path.Combine(work, Path.GetFileName(f)), true);
+            foreach (var f in scripts) File.Copy(f, Path.Combine(work, Path.GetFileName(f)), true);
 
             var res = sc3.ExtractText("*.scx", work);
-            if (!res.Ok && log != null) log("sc3tools : " + (res.FirstError ?? "extraction partielle"));
+            if (!res.Ok && log != null) log("sc3tools: " + (res.FirstError ?? "partial extraction"));
 
             string txtDir = Path.Combine(work, "txt");
             if (Directory.Exists(txtDir))
+            {
                 foreach (var f in Directory.GetFiles(txtDir, "*.txt"))
-                    reference._lines[Path.GetFileName(f)] = File.ReadAllLines(f, Encoding.UTF8);
+                {
+                    // sc3tools writes <name>.scx.txt, so dropping the .txt gives the script name.
+                    reference._lines[Path.GetFileNameWithoutExtension(f)] = File.ReadAllLines(f, Encoding.UTF8);
+                }
+            }
 
             if (log != null)
-                log(string.Format("Reference : texte de {0} script(s) relu depuis script-compile.", reference._lines.Count));
+                log(string.Format("Reference: read the text of {0} script(s).", reference._lines.Count));
             return reference;
         }
 
-        /// <summary>Lignes de reference pour un nom de fichier texte, ou null si absent.</summary>
-        public string[] Lines(string txtFileName)
+        /// <summary>Reference lines for a script name such as cc_01_01.scx, or null if absent.</summary>
+        public string[] Lines(string scxName)
         {
             string[] v;
-            return _lines.TryGetValue(txtFileName, out v) ? v : null;
+            return _lines.TryGetValue(scxName, out v) ? v : null;
         }
 
-        /// <summary>Un couple .scx / texte qui compile, utilise pour sonder le charset.</summary>
+        /// <summary>
+        /// A script paired with its own text, used as a neutral carrier when probing the
+        /// charset: since the text came out of that very script, it is sure to compile.
+        /// </summary>
         public bool TryPickTemplate(out string scxPath, out string[] lines)
         {
             foreach (var kv in _lines.OrderBy(k => k.Value.Length))
             {
-                string scx = Path.Combine(_work, ProjectPaths.ScxNameFor(kv.Key));
+                string scx = Path.Combine(_work, kv.Key);
                 if (!File.Exists(scx)) continue;
                 if (!kv.Value.Any(l => l.IndexOf('[') >= 0 && l.Length > 20)) continue;
                 scxPath = scx;

@@ -7,8 +7,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{DB1869B4-1D5
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magecraft", "src\Magecraft\Magecraft.csproj", "{26902F76-7530-4E03-9F84-4CA27A50EC60}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Magecraft.Packer", "src\Magecraft.Packer\Magecraft.Packer.csproj", "{0F1870F5-6511-4990-9855-D16ED9461B54}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -22,13 +20,8 @@ Global
 		{26902F76-7530-4E03-9F84-4CA27A50EC60}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{26902F76-7530-4E03-9F84-4CA27A50EC60}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{26902F76-7530-4E03-9F84-4CA27A50EC60}.Release|Any CPU.Build.0 = Release|Any CPU
-		{0F1870F5-6511-4990-9855-D16ED9461B54}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{0F1870F5-6511-4990-9855-D16ED9461B54}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{0F1870F5-6511-4990-9855-D16ED9461B54}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{0F1870F5-6511-4990-9855-D16ED9461B54}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{26902F76-7530-4E03-9F84-4CA27A50EC60} = {DB1869B4-1D57-4710-B083-67A4460CDE25}
-		{0F1870F5-6511-4990-9855-D16ED9461B54} = {DB1869B4-1D57-4710-B083-67A4460CDE25}
 	EndGlobalSection
 EndGlobal

@@ -2,5 +2,4 @@ bin/
 obj/
 *.user
 magecraft-settings.txt
-magecraft-packer-settings.txt
 charset-cache.txt

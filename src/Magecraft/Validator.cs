@@ -7,16 +7,16 @@ using System.Text.RegularExpressions;
 
 namespace Magecraft
 {
-    public enum Severity { Erreur, Avertissement, Info }
+    public enum Severity { Error, Warning, Info }
 
     public sealed class Finding
     {
         public Severity Severity;
-        public string File;      // nom du .scx.txt
-        public int Line;         // 1-based, 0 = probleme au niveau du fichier
+        public string File;      // text file name
+        public int Line;         // 1-based, 0 means the whole file
         public string Rule;
         public string Message;
-        public string Fix;       // texte de remplacement propose, ou null
+        public string Fix;       // suggested replacement, or null
         public string Excerpt;
     }
 
@@ -24,24 +24,25 @@ namespace Magecraft
     {
         public List<Finding> Findings = new List<Finding>();
         public int TotalLines;
-        public int PendingLines;      // lignes qui different du .scx deja compile
+        public int PendingLines;     // lines that differ from the compiled script
         public int FilesChecked;
+        public int Untranslated;     // scripts with no text file at all
 
-        public int Errors { get { return Findings.Count(f => f.Severity == Severity.Erreur); } }
-        public int Warnings { get { return Findings.Count(f => f.Severity == Severity.Avertissement); } }
+        public int Errors { get { return Findings.Count(f => f.Severity == Severity.Error); } }
+        public int Warnings { get { return Findings.Count(f => f.Severity == Severity.Warning); } }
         public bool UpToDate { get { return PendingLines == 0; } }
     }
 
     /// <summary>
-    /// Controle les scripts traduits avant compilation. La reference est le texte
-    /// reellement present dans les .scx de script-compile, relu par sc3tools : parite de
-    /// lignes, caracteres refuses par le jeu, integrite des balises.
+    /// Checks translated text before it is compiled. The reference is the text actually
+    /// held by the .scx files, read back with sc3tools: line count, characters the game
+    /// refuses, tag integrity.
     /// </summary>
     public sealed class Validator
     {
         private static readonly Regex TagRe = new Regex(@"\[[^\]]*\]", RegexOptions.Compiled);
 
-        /// <summary>Balises interpretees par le moteur. Le reste entre crochets est du texte.</summary>
+        /// <summary>Tags the engine interprets. Anything else in brackets is literal text.</summary>
         private static readonly HashSet<string> ControlTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "%p", "%e", "%18", "name", "line", "margin", "center", "evaluate",
@@ -50,9 +51,9 @@ namespace Magecraft
         };
 
         /// <summary>
-        /// Balises dont l'absence casse le script ou le dialogue : pause de page, nom du
-        /// locuteur, code evalue. Les autres (couleur, retour a la ligne, marge) relevent
-        /// de la mise en forme et peuvent legitimement differer en francais.
+        /// Tags whose loss breaks the script or the dialogue: page break, speaker name,
+        /// evaluated code. The rest (colour, line break, margin) is layout, which a
+        /// translation may legitimately redistribute.
         /// </summary>
         private static readonly HashSet<string> CriticalTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -60,19 +61,19 @@ namespace Magecraft
             "auto-forward", "auto-forward-1a", "parallel"
         };
 
-        /// <summary>Balises dont la valeur doit rester identique au script compile (ce sont des opcodes).</summary>
+        /// <summary>Tags that must be reproduced exactly, value included: they are opcodes.</summary>
         private static readonly HashSet<string> ExactTags = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "evaluate", "hardcoded-value", "%p", "%e", "%18", "auto-forward", "auto-forward-1a"
         };
 
-        private readonly ProjectPaths _paths;
-        private readonly Charset _charset;
+        private readonly Workspace _workspace;
         private readonly Sc3Tools _sc3;
+        private readonly Charset _charset;
 
-        public Validator(ProjectPaths paths, Sc3Tools sc3, Charset charset)
+        public Validator(Workspace workspace, Sc3Tools sc3, Charset charset)
         {
-            _paths = paths;
+            _workspace = workspace;
             _sc3 = sc3;
             _charset = charset;
         }
@@ -80,98 +81,109 @@ namespace Magecraft
         public ValidationReport Run(Action<string> log, Action<int, int> progress)
         {
             var report = new ValidationReport();
-            var files = Directory.GetFiles(_paths.ScriptFr, "*.scx.txt").OrderBy(f => f).ToArray();
+            var scripts = _workspace.Scripts();
 
-            using (var reference = Reference.Extract(_paths, _sc3, log))
+            using (var reference = Reference.Extract(_workspace, _sc3, log))
             {
-                // Une seule passe de detection du charset pour tout le corpus.
+                // One charset detection pass for the whole corpus.
                 var alphabet = new HashSet<char>();
-                foreach (var f in files)
-                    foreach (var c in StripTags(File.ReadAllText(f, Encoding.UTF8)))
+                foreach (var scx in scripts)
+                {
+                    string txt = _workspace.TextFor(Path.GetFileName(scx));
+                    if (txt == null) continue;
+                    foreach (var c in StripTags(File.ReadAllText(txt, Encoding.UTF8)))
                         alphabet.Add(c);
+                }
                 _charset.Probe(alphabet, reference, log);
 
-                for (int i = 0; i < files.Length; i++)
+                for (int i = 0; i < scripts.Count; i++)
                 {
-                    CheckFile(files[i], reference, report);
-                    if (progress != null) progress(i + 1, files.Length);
+                    CheckScript(scripts[i], reference, report);
+                    if (progress != null) progress(i + 1, scripts.Count);
                 }
             }
-            report.FilesChecked = files.Length;
+            report.FilesChecked = scripts.Count;
             return report;
         }
 
-        private void CheckFile(string frPath, Reference reference, ValidationReport report)
+        private void CheckScript(string scxPath, Reference reference, ValidationReport report)
         {
-            string name = Path.GetFileName(frPath);
-            CheckLineEndings(report, name, File.ReadAllText(frPath, Encoding.UTF8));
-            var fr = File.ReadAllLines(frPath, Encoding.UTF8);
-            string[] en = reference.Lines(name);
-
-            if (en == null)
+            string scxName = Path.GetFileName(scxPath);
+            string txtPath = _workspace.TextFor(scxName);
+            if (txtPath == null)
             {
-                Add(report, Severity.Avertissement, name, 0, "reference",
-                    "Aucun script correspondant dans script-compile : controles de structure impossibles.", null, null);
-            }
-            else if (en.Length != fr.Length)
-            {
-                Add(report, Severity.Erreur, name, 0, "lignes",
-                    string.Format("{0} lignes ici contre {1} dans le script compile : la compilation echouera ou decalera le texte.",
-                                  fr.Length, en.Length), null, null);
+                report.Untranslated++;
+                Add(report, Severity.Info, scxName, 0, "no-text",
+                    "No text file for this script: it will be packed unchanged.", null, null);
+                return;
             }
 
-            for (int i = 0; i < fr.Length; i++)
+            string name = Path.GetFileName(txtPath);
+            CheckLineEndings(report, name, File.ReadAllText(txtPath, Encoding.UTF8));
+            var text = File.ReadAllLines(txtPath, Encoding.UTF8);
+            string[] source = reference.Lines(scxName);
+
+            if (source == null)
             {
-                string line = fr[i];
-                string enLine = (en != null && i < en.Length) ? en[i] : null;
+                Add(report, Severity.Warning, name, 0, "reference",
+                    "Could not read the script's own text: structural checks unavailable.", null, null);
+            }
+            else if (source.Length != text.Length)
+            {
+                Add(report, Severity.Error, name, 0, "line-count",
+                    string.Format("{0} lines here against {1} in the script: the build will fail or shift the text.",
+                                  text.Length, source.Length), null, null);
+            }
+
+            for (int i = 0; i < text.Length; i++)
+            {
+                string line = text[i];
+                string src = (source != null && i < source.Length) ? source[i] : null;
                 int no = i + 1;
 
-                CheckBrackets(report, name, no, line, enLine);
+                CheckBrackets(report, name, no, line, src);
                 CheckCharset(report, name, no, line);
 
-                if (enLine != null)
-                {
-                    CheckTags(report, name, no, line, enLine);
+                if (src == null) continue;
 
-                    report.TotalLines++;
-                    if (line.Trim().Length == 0 && enLine.Trim().Length > 0)
-                    {
-                        Add(report, Severity.Erreur, name, no, "vide",
-                            "Ligne vide alors que le script compile contient du texte.", null, Excerpt(enLine));
-                    }
-                    else if (line != enLine)
-                    {
-                        report.PendingLines++;
-                        Add(report, Severity.Info, name, no, "a-compiler",
-                            "Texte different du script compile : sera applique a la prochaine construction.",
-                            null, Excerpt(enLine));
-                    }
+                CheckTags(report, name, no, line, src);
+
+                report.TotalLines++;
+                if (line.Trim().Length == 0 && src.Trim().Length > 0)
+                {
+                    Add(report, Severity.Error, name, no, "empty",
+                        "Line is empty while the script holds text here.", null, Excerpt(src));
+                }
+                else if (line != src)
+                {
+                    report.PendingLines++;
+                    Add(report, Severity.Info, name, no, "pending",
+                        "Differs from the compiled script: the next build will apply it.", null, Excerpt(src));
                 }
             }
         }
 
-        // ------------------------------------------------------------------ regles
+        // ------------------------------------------------------------------- rules
 
         /// <summary>
-        /// Certaines lignes (tables de ponctuation de _system.scx) contiennent des crochets
-        /// litteraux deja desequilibres dans le script d'origine. On ne signale donc que les
-        /// desequilibres que le texte traduit introduit lui-meme.
+        /// Some lines (punctuation tables in system scripts) hold literal brackets that are
+        /// already unbalanced in the original, so only report imbalance the text introduces.
         /// </summary>
-        private void CheckBrackets(ValidationReport report, string file, int no, string fr, string en)
+        private void CheckBrackets(ValidationReport report, string file, int no, string text, string source)
         {
-            int frBalance = fr.Count(c => c == '[') - fr.Count(c => c == ']');
-            int reference = en == null ? 0 : en.Count(c => c == '[') - en.Count(c => c == ']');
-            if (frBalance != reference)
+            int balance = text.Count(c => c == '[') - text.Count(c => c == ']');
+            int expected = source == null ? 0 : source.Count(c => c == '[') - source.Count(c => c == ']');
+            if (balance != expected)
             {
-                Add(report, Severity.Erreur, file, no, "crochets",
-                    "Crochets desequilibres : une balise est mal fermee.", null, Excerpt(fr));
+                Add(report, Severity.Error, file, no, "brackets",
+                    "Unbalanced brackets: a tag is not closed properly.", null, Excerpt(text));
             }
         }
 
         /// <summary>
-        /// sc3tools accepte les fins de ligne Windows completes, mais traite un retour
-        /// chariot isole comme un caractere de texte -- et le refuse. C'est invisible dans
-        /// un editeur : un seul \r en fin de fichier bloque toute la compilation.
+        /// sc3tools accepts complete Windows line endings, but treats a lone carriage return
+        /// as a text character -- and rejects it. It is invisible in an editor, yet a single
+        /// stray \r stops the whole file from compiling.
         /// </summary>
         private void CheckLineEndings(ValidationReport report, string file, string raw)
         {
@@ -180,11 +192,11 @@ namespace Magecraft
             {
                 if (raw[i] == '\n') { line++; continue; }
                 if (raw[i] != '\r') continue;
-                if (i + 1 < raw.Length && raw[i + 1] == '\n') continue;   // CRLF normal
+                if (i + 1 < raw.Length && raw[i + 1] == '\n') continue;   // ordinary CRLF
 
-                Add(report, Severity.Erreur, file, line, "fin-de-ligne",
-                    "Retour chariot isole : sc3tools le compte comme un caractere et refusera le fichier entier. " +
-                    "« Corriger les caracteres » le supprime.", "\\r -> saut de ligne", null);
+                Add(report, Severity.Error, file, line, "line-ending",
+                    "Lone carriage return: sc3tools counts it as a character and will reject the whole file. " +
+                    "\"Fix characters\" removes it.", "\\r -> line break", null);
                 line++;
             }
         }
@@ -198,56 +210,56 @@ namespace Magecraft
                 if (_charset.IsSupported(c) || !seen.Add(c)) continue;
 
                 string fix = Charset.SuggestFix(c);
-                Add(report, Severity.Erreur, file, no, "charset",
-                    string.Format("Le caractere « {0} » (U+{1:X4}) n'existe pas dans le jeu : sc3tools refusera tout le fichier.{2}",
-                                  c, (int)c, fix != null ? " Remplacement propose : " + fix : ""),
+                Add(report, Severity.Error, file, no, "charset",
+                    string.Format("The game has no character '{0}' (U+{1:X4}): sc3tools will reject the whole file.{2}",
+                                  c, (int)c, fix != null ? " Suggested replacement: " + fix : ""),
                     fix != null ? c + " -> " + fix : null, Excerpt(line));
             }
         }
 
-        private void CheckTags(ValidationReport report, string file, int no, string fr, string en)
+        private void CheckTags(ValidationReport report, string file, int no, string text, string source)
         {
-            var frTags = ControlTagsOf(fr);
-            var enTags = ControlTagsOf(en);
+            var textTags = ControlTagsOf(text);
+            var sourceTags = ControlTagsOf(source);
 
-            // Comparaison par nom : une balise perdue casse l'affichage ou le script.
-            var frNames = Counted(frTags.Select(TagName));
-            var enNames = Counted(enTags.Select(TagName));
+            var textNames = Counted(textTags.Select(TagName));
+            var sourceNames = Counted(sourceTags.Select(TagName));
 
-            foreach (var kv in enNames)
+            // Compare by name: a lost tag breaks either the display or the script itself.
+            foreach (var kv in sourceNames)
             {
-                int got; frNames.TryGetValue(kv.Key, out got);
+                int got; textNames.TryGetValue(kv.Key, out got);
                 if (got < kv.Value)
-                    Add(report, CriticalTags.Contains(kv.Key) ? Severity.Erreur : Severity.Avertissement,
-                        file, no, "balise",
-                        string.Format("Balise [{0}] manquante ({1} attendue(s), {2} presente(s)).", kv.Key, kv.Value, got),
-                        null, Excerpt(en));
+                    Add(report, CriticalTags.Contains(kv.Key) ? Severity.Error : Severity.Warning,
+                        file, no, "tag",
+                        string.Format("Missing [{0}] tag ({1} expected, {2} present).", kv.Key, kv.Value, got),
+                        null, Excerpt(source));
             }
-            foreach (var kv in frNames)
+            foreach (var kv in textNames)
             {
-                int expected; enNames.TryGetValue(kv.Key, out expected);
+                int expected; sourceNames.TryGetValue(kv.Key, out expected);
                 if (kv.Value > expected)
-                    Add(report, Severity.Avertissement, file, no, "balise",
-                        string.Format("Balise [{0}] en trop ({1} presente(s), {2} dans le script compile).", kv.Key, kv.Value, expected),
-                        null, Excerpt(fr));
+                    Add(report, Severity.Warning, file, no, "tag",
+                        string.Format("Extra [{0}] tag ({1} present, {2} in the script).", kv.Key, kv.Value, expected),
+                        null, Excerpt(text));
             }
 
-            // Les balises-opcodes doivent etre reproduites a l'identique, valeur comprise.
-            var frExact = frTags.Where(t => ExactTags.Contains(TagName(t))).ToList();
-            var enExact = enTags.Where(t => ExactTags.Contains(TagName(t))).ToList();
-            if (frExact.Count == enExact.Count)
+            // Opcode tags must come back untouched, value included.
+            var textExact = textTags.Where(t => ExactTags.Contains(TagName(t))).ToList();
+            var sourceExact = sourceTags.Where(t => ExactTags.Contains(TagName(t))).ToList();
+            if (textExact.Count == sourceExact.Count)
             {
-                for (int k = 0; k < frExact.Count; k++)
+                for (int k = 0; k < textExact.Count; k++)
                 {
-                    if (frExact[k] != enExact[k])
-                        Add(report, Severity.Erreur, file, no, "balise",
-                            string.Format("Balise modifiee : {0} au lieu de {1}. Cette valeur est du code, elle doit rester intacte.",
-                                          frExact[k], enExact[k]), enExact[k], Excerpt(fr));
+                    if (textExact[k] != sourceExact[k])
+                        Add(report, Severity.Error, file, no, "tag",
+                            string.Format("Altered tag: {0} instead of {1}. That value is code and must stay intact.",
+                                          textExact[k], sourceExact[k]), sourceExact[k], Excerpt(text));
                 }
             }
         }
 
-        // ------------------------------------------------------------------ outils
+        // ------------------------------------------------------------------- helpers
 
         public static string StripTags(string s)
         {

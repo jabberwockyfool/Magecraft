@@ -7,29 +7,29 @@ using System.Text;
 namespace Magecraft
 {
     /// <summary>
-    /// Determine quels caracteres CHAOS;CHILD sait encoder.
+    /// Works out which characters the game can actually encode.
     ///
-    /// La table est embarquee dans sc3tools.exe mais melangee a celle des autres jeux :
-    /// la lire directement donne des faux positifs (U+2026 y figure alors que le jeu le
-    /// refuse). On interroge donc sc3tools lui-meme, une seule fois par caractere, et on
-    /// met le verdict en cache.
+    /// The table does live inside sc3tools.exe, but mixed together with the other games':
+    /// reading it directly yields false positives (U+2026 appears there even though
+    /// CHAOS;CHILD rejects it). So we ask sc3tools itself, once per character, and cache
+    /// the verdicts.
     /// </summary>
     public sealed class Charset
     {
-        // Remplacements surs pour les caracteres francais que le jeu ne connait pas.
+        /// <summary>Safe replacements for characters the game does not know.</summary>
         public static readonly Dictionary<char, string> Fixes = new Dictionary<char, string>
         {
-            { 'œ', "oe" },      // oe ligature
-            { 'Œ', "OE" },      // OE ligature
-            { '«', "“" },  // guillemet francais ouvrant -> guillemet courbe
-            { '»', "”" },  // guillemet francais fermant -> guillemet courbe
-            { '…', "..." },     // points de suspension
-            { 'Ÿ', "Y" },       // Y trema
-            { ' ', " " },       // espace insecable
-            { ' ', " " },       // espace fine insecable
-            { '‑', "-" },       // trait d'union insecable
-            { '−', "-" },       // signe moins
-            { '″', "”" },  // double prime
+            { 'œ', "oe" },       // oe ligature
+            { 'Œ', "OE" },       // OE ligature
+            { '«', "“" },   // << -> curly opening quote
+            { '»', "”" },   // >> -> curly closing quote
+            { '…', "..." },      // ellipsis
+            { 'Ÿ', "Y" },        // Y with diaeresis
+            { ' ', " " },        // no-break space
+            { ' ', " " },        // narrow no-break space
+            { '‑', "-" },        // non-breaking hyphen
+            { '−', "-" },        // minus sign
+            { '″', "”" },   // double prime
         };
 
         private readonly Sc3Tools _sc3;
@@ -48,7 +48,7 @@ namespace Magecraft
         public bool IsSupported(char c) { return !_bad.Contains(c); }
         public IEnumerable<char> Rejected { get { return _bad.OrderBy(c => c); } }
 
-        /// <summary>Suggestion de remplacement, ou null s'il n'y en a pas d'evidente.</summary>
+        /// <summary>Suggested replacement, or null when there is no obvious one.</summary>
         public static string SuggestFix(char c)
         {
             string fix;
@@ -56,28 +56,28 @@ namespace Magecraft
         }
 
         /// <summary>
-        /// Teste aupres de sc3tools tous les caracteres encore inconnus. Ne fait rien si
-        /// tout est deja en cache. Retourne false si aucun modele compilable n'a ete trouve.
+        /// Asks sc3tools about every character not yet known. Does nothing when the cache
+        /// already covers them. Returns false if no compilable template could be prepared.
         /// </summary>
         public bool Probe(IEnumerable<char> chars, Reference reference, Action<string> log)
         {
             var unknown = chars.Where(c => c != '\n' && c != '\r' && !IsKnown(c)).Distinct().ToList();
             if (unknown.Count == 0) return true;
 
-            string work = Path.Combine(Path.GetTempPath(), "ccfr-charset-" + Guid.NewGuid().ToString("N"));
+            string work = Path.Combine(Path.GetTempPath(), "magecraft-charset-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(work);
             try
             {
                 string scxSource; string[] template; int lineIdx;
-                if (!TryPrepare(work, reference, out scxSource, out template, out lineIdx))
+                if (!TryPrepare(reference, out scxSource, out template, out lineIdx))
                 {
-                    log("Impossible de preparer un script de test : detection du charset abandonnee.");
+                    log("Could not prepare a test script: charset detection skipped.");
                     return false;
                 }
 
-                log(string.Format("Test de {0} caractere(s) inconnu(s) via sc3tools...", unknown.Count));
+                log(string.Format("Testing {0} unknown character(s) against sc3tools...", unknown.Count));
 
-                // sc3tools s'arrete au premier caractere fautif : on retire et on relance.
+                // sc3tools stops at the first offending character, so we drop it and retry.
                 foreach (var chunk in Chunk(unknown, 150))
                 {
                     var pending = new List<char>(chunk);
@@ -92,7 +92,7 @@ namespace Magecraft
                         char bad = res.RejectedChar;
                         if (bad == '\0')
                         {
-                            log("sc3tools a renvoye une erreur inattendue : " + (res.FirstError ?? "?"));
+                            log("sc3tools returned an unexpected error: " + (res.FirstError ?? "?"));
                             return false;
                         }
                         _bad.Add(bad);
@@ -108,14 +108,9 @@ namespace Magecraft
             }
         }
 
-        // ---------------------------------------------------------------- interne
+        // ------------------------------------------------------------------ internals
 
-        /// <summary>
-        /// Prend un couple .scx / texte issu de script-compile : comme ce texte sort du
-        /// script lui-meme, il compile forcement, ce qui en fait un support neutre pour
-        /// tester les caracteres.
-        /// </summary>
-        private bool TryPrepare(string work, Reference reference, out string scxSource, out string[] template, out int lineIdx)
+        private static bool TryPrepare(Reference reference, out string scxSource, out string[] template, out int lineIdx)
         {
             scxSource = null; template = null; lineIdx = -1;
             if (reference == null) return false;
@@ -135,14 +130,14 @@ namespace Magecraft
             var lines = (string[])template.Clone();
             lines[lineIdx] = Insert(lines[lineIdx], new string(probe.ToArray()));
 
-            // replace-text modifie le .scx sur place : on repart d'une copie fraiche.
+            // replace-text edits the .scx in place, so start from a fresh copy every time.
             string name = Path.GetFileName(scxSource);
             File.Copy(scxSource, Path.Combine(work, name), true);
             File.WriteAllLines(Path.Combine(work, name + ".txt"), lines, Utf8NoBom);
             return _sc3.ReplaceText(name, name + ".txt", work);
         }
 
-        /// <summary>Insere du texte juste avant la derniere balise, pour ne casser aucun opcode.</summary>
+        /// <summary>Inserts text right before the last tag so no opcode is disturbed.</summary>
         private static string Insert(string line, string text)
         {
             int at = line.LastIndexOf('[');
@@ -171,7 +166,7 @@ namespace Magecraft
                     else if (line[0] == '-') _bad.Add((char)code);
                 }
             }
-            catch { /* cache illisible : on repartira de zero */ }
+            catch { /* unreadable cache: start over */ }
         }
 
         private void SaveCache()
@@ -179,13 +174,13 @@ namespace Magecraft
             try
             {
                 var sb = new StringBuilder();
-                sb.AppendLine("# Verdicts de sc3tools sur le charset CHAOS;CHILD. '-' = refuse par le jeu.");
+                sb.AppendLine("# sc3tools verdicts on the game charset. '-' means the game rejects it.");
                 foreach (var c in _bad.OrderBy(c => c)) sb.AppendLine("-" + ((int)c).ToString("X4"));
                 foreach (var c in _good.OrderBy(c => c)) sb.AppendLine("+" + ((int)c).ToString("X4"));
                 Directory.CreateDirectory(Path.GetDirectoryName(_cacheFile));
                 File.WriteAllText(_cacheFile, sb.ToString(), Utf8NoBom);
             }
-            catch { /* cache non ecrit : on reprobera au prochain lancement */ }
+            catch { /* cache not written: we will probe again next time */ }
         }
     }
 }

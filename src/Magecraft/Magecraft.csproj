@@ -26,6 +26,7 @@
   <ItemGroup>
     <!-- Permet de compiler net48 avec le SDK dotnet, sans Visual Studio. -->
     <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="All" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
 </Project>
