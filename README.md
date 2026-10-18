@@ -23,6 +23,6 @@ enough to compile it; Visual Studio is not required.
 - **mrboms** for SGOMPK, used as a reference on the MPK format.
 - **MAGES. Inc.** for the original games.
 
-Notes
+## Notes
 
 Contributions are welcome. Using AI is fine sometimes, but the code must always be reviewed by a human. Code that is entirely vibecoded will be discarded.
